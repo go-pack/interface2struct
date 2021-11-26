@@ -1,4 +1,4 @@
-module github.com/go-pack/interfaceStruct
+module github.com/go-pack/interface2struct
 
 go 1.16
 

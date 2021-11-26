@@ -5,16 +5,19 @@ import (
 	"fmt"
 	"go/token"
 	"os"
+	"strings"
 
 	"github.com/dave/dst"
 	"github.com/dave/dst/decorator"
 )
 
 var (
-	stractName  = flag.String("s", "", "结构名词")
-	isOverWrite = flag.Bool("m", false, "是否覆盖")
-	output      = flag.String("o", "/tmp/xx.go", "输出位置")
-	apiMap      = make(map[string]bool)
+	structName     = flag.String("s", "", "结构名词")
+	isOverWrite    = flag.Bool("m", false, "是否覆盖")
+	output         = flag.String("o", "/tmp/xx.go", "输出位置")
+	apiMap         = make(map[string]bool)
+	structMap      = make(map[string]bool)
+	hasStuctInFile = false
 )
 
 //go:generate go version
@@ -24,10 +27,10 @@ func main() {
 		flag.Usage()
 		return
 	}
-	if *stractName == "" {
+	if *structName == "" {
 		fmt.Printf("请输入结构名!")
 	}
-	forStruct := *stractName
+	forStruct := *structName
 	wd, _ := os.Getwd()
 	file := os.Getenv("GOFILE")
 	pack := os.Getenv("GOPACKAGE")
@@ -51,6 +54,7 @@ func main() {
 					if _, ok := val.Type.(*dst.InterfaceType); ok {
 						apiMap[val.Name.Name] = true
 					}
+					structMap[val.Name.Name] = true
 				}
 			}
 		case *dst.FuncDecl:
@@ -66,8 +70,13 @@ func main() {
 						return true
 					}
 				} else {
-					// return true
+					return true
 				}
+				if faceDecl.Name.Name[:1] == strings.ToLower(faceDecl.Name.Name[:1]) {
+					// 私有方法不生成接口
+					return true
+				}
+
 				dstMethods = append(dstMethods, &dst.Field{
 					Names: append(make([]*dst.Ident, 0), &dst.Ident{Name: faceDecl.Name.Name}),
 					Type: &dst.FuncType{
@@ -83,6 +92,11 @@ func main() {
 
 	if _, ok := apiMap["I"+forStruct]; ok {
 		fmt.Printf("已经存在接口 %s 执行终止操作!", "I"+forStruct)
+		return
+	}
+
+	if _, ok := structMap[forStruct]; !ok {
+		fmt.Printf("不经在Struct %s 执行终止操作!", forStruct)
 		return
 	}
 
