@@ -31,6 +31,7 @@ var (
 
 	structMap          = make(map[string]methods)
 	oldMethodMap       = make(map[string]*dst.FuncDecl)
+	oldImportMap       = make(map[string]*dst.ImportSpec)
 	interfaceMethodMap = make(map[string]*dst.FuncDecl)
 	hasInterfaceInFile = false
 )
@@ -85,13 +86,13 @@ func main() {
 	file := os.Getenv("GOFILE")
 	// pack := os.Getenv("GOPACKAGE")
 	pack := os.Getenv("GOPACKAGE")
-
 	// path := wd + string(os.PathSeparator) + file
 	path := sysPath.Join(wd, file)
 	// fmt.Println("path " + path + " \r\n")
 	// fmt.Println("wd " + wd + " \r\n")
 	// fmt.Println("GOFILE " + file + " \r\n")
-	// fmt.Println("rootPath " + rootPath + " \r\n")
+	fmt.Println("pack " + pack + " \r\n")
+
 	fmt.Println("rootPath " + rootPath + " \r\n")
 	fmt.Println("mod " + mod + " \r\n")
 	tempOut := *output
@@ -125,8 +126,12 @@ func main() {
 				switch x := n.(type) {
 				case *dst.FuncDecl:
 					oldMethodMap[x.Name.Name] = x
+				case *dst.ImportSpec:
+					oldImportMap[x.Path.Value] = x
 				}
+
 				return true
+
 			})
 		}
 
@@ -190,6 +195,7 @@ func main() {
 		}
 		return true
 	})
+
 	//添加接口import
 	// interfaceImport = append(interfaceImport, &dst.ImportSpec{
 	// 	Name: nil,
@@ -198,7 +204,29 @@ func main() {
 	// 	},
 	// })
 	// fmt.Printf("d %+v mod %s", interfaceImport, mod)
+	//添加接口代理的结构
 
+	interfaceImport = append(interfaceImport, &dst.ImportSpec{
+		Name: nil,
+		Path: &dst.BasicLit{
+			Value: "\"" + mod + strings.TrimPrefix(wd, rootPath) + "\"",
+		},
+	})
+	//老代码有心增import的处理
+	findImport := func(d *dst.ImportSpec) bool {
+		for _, v := range interfaceImport {
+			if v.(*dst.ImportSpec).Path.Value == d.Path.Value {
+				return true
+			}
+		}
+		return false
+	}
+	for _, v := range oldImportMap {
+		if !findImport(v) {
+			interfaceImport = append(interfaceImport, v)
+		}
+	}
+	fmt.Printf("d %+v mod %s", interfaceImport, mod)
 	typeSpec := &dst.TypeSpec{}
 	typeSpec.Name = &dst.Ident{
 		Name: *structName,
@@ -212,12 +240,7 @@ func main() {
 		typeSpec.Type = &dst.StructType{
 			Fields: &dst.FieldList{
 				List: append(make([]*dst.Field, 0), &dst.Field{
-					Type: &dst.Ident{
-						Name: *proxyTarget,
-						Obj: &dst.Object{
-							Kind: dst.Typ,
-						},
-					},
+					Type: &dst.SelectorExpr{X: dst.NewIdent(pack), Sel: &dst.Ident{Name: *structName}},
 					Names: append(make([]*dst.Ident, 0), &dst.Ident{
 						Name: "proxy",
 						Obj: &dst.Object{
@@ -250,7 +273,7 @@ func main() {
 			Names: append(make([]*dst.Ident, 0), &dst.Ident{
 				Name: "src",
 			}),
-			Type: &dst.Ident{Name: *proxyTarget},
+			Type: &dst.SelectorExpr{X: dst.NewIdent(pack), Sel: &dst.Ident{Name: *structName}},
 		})
 	}
 	//构造内容
