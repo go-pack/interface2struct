@@ -1,15 +1,22 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"go/token"
 	"os"
+	sysPath "path"
 	"strings"
 
 	"github.com/dave/dst"
 	"github.com/dave/dst/decorator"
 )
+
+func FileExist(path string) bool {
+	_, err := os.Lstat(path)
+	return !os.IsNotExist(err)
+}
 
 type methods = map[*dst.FuncType]bool
 
@@ -18,13 +25,14 @@ var (
 	isOverWrite   = flag.Bool("m", false, "是否覆盖")
 	structName    = flag.String("name", *interfaceName+"Impl", "structName")
 	output        = flag.String("o", "/tmp/xx.go", "输出位置")
+	proxyTarget   = flag.String("p", "", "要代理的结构")
+	toPackageName = flag.String("t", "", "生成的包名称")
 	apiMap        = make(map[string]bool)
 
 	structMap          = make(map[string]methods)
+	oldMethodMap       = make(map[string]*dst.FuncDecl)
+	interfaceMethodMap = make(map[string]*dst.FuncDecl)
 	hasInterfaceInFile = false
-
-	proxyTargetStr = "IndexService"
-	proxyTarget    = &proxyTargetStr
 )
 
 //go:generate go version
@@ -38,13 +46,57 @@ func main() {
 		fmt.Printf("请输入接口名称!")
 	}
 	wd, _ := os.Getwd()
+	if os.Getenv("USE_WD") != "" {
+		wd = os.Getenv("USE_WD")
+	}
+	buf, err := os.ReadFile(sysPath.Join(wd, "go.mod"))
+	if err != nil {
+		fmt.Printf("gomod read %s \r\n", err)
+		return
+	}
+	reader := bufio.NewReader(strings.NewReader(string(buf)))
+	line, _, err := reader.ReadLine()
+	if err != nil {
+		fmt.Printf("ReadLine  %s \r\n", err)
+		return
+	}
+	if !strings.Contains(string(line), "module") {
+		fmt.Printf("goMode module missing \r\n")
+		return
+	}
+	mod := strings.Split(string(line), " ")[1]
 	file := os.Getenv("GOFILE")
 	pack := os.Getenv("GOPACKAGE")
 
 	path := wd + string(os.PathSeparator) + file
 
-	path = "/Users/chen/IdeaProjects/smm-go/internal/services/indexService.go"
+	tempOut := *output
+	if *isOverWrite {
+		tempOut = path
+	} else {
+		nameStr := *structName
+		name := strings.ToLower(nameStr[:1]) + nameStr[1:]
+		tempOut = wd + string(os.PathSeparator) + tempOut + string(os.PathSeparator) + name + ".go"
+	}
+	if FileExist(tempOut) {
+		buf, err := os.ReadFile(tempOut)
+		if len(buf) > 0 && err == nil {
+			fset := token.NewFileSet()
+			olfTree, err := decorator.ParseFile(fset, tempOut, nil, 0)
+			if err != nil {
+				fmt.Println("存在就文件 " + tempOut + " 读取错误 " + err.Error())
+				return
+			}
+			dst.Inspect(olfTree, func(n dst.Node) bool {
+				switch x := n.(type) {
+				case *dst.FuncDecl:
+					oldMethodMap[x.Name.Name] = x
+				}
+				return true
+			})
+		}
 
+	}
 	fmt.Printf("wd %s file %s pack %s path %s \r\n", wd, file, pack, path)
 	fset := token.NewFileSet()
 	f, err := decorator.ParseFile(fset, path, nil, 0)
@@ -107,7 +159,14 @@ func main() {
 		}
 		return true
 	})
-	fmt.Printf("d %+v", interfaceImport)
+	//添加接口import
+	// interfaceImport = append(interfaceImport, &dst.ImportSpec{
+	// 	Name: nil,
+	// 	Path: &dst.BasicLit{
+	// 		Value: "\"" + sysPath.Join(mod, filepath.Dir(file)) + "\"",
+	// 	},
+	// })
+	fmt.Printf("d %+v mod %s", interfaceImport, mod)
 
 	typeSpec := &dst.TypeSpec{}
 	typeSpec.Name = &dst.Ident{
@@ -117,71 +176,119 @@ func main() {
 			Name: *structName,
 		},
 	}
-	typeSpec.Type = &dst.StructType{
-		Fields: &dst.FieldList{
-			List: append(make([]*dst.Field, 0), &dst.Field{
+	//结构代理类的属性字段
+	if *proxyTarget != "" {
+		typeSpec.Type = &dst.StructType{
+			Fields: &dst.FieldList{
+				List: append(make([]*dst.Field, 0), &dst.Field{
+					Type: &dst.Ident{
+						Name: *proxyTarget,
+						Obj: &dst.Object{
+							Kind: dst.Typ,
+						},
+					},
+					Names: append(make([]*dst.Ident, 0), &dst.Ident{
+						Name: "proxy",
+						Obj: &dst.Object{
+							Kind: dst.Var,
+							Name: "proxy",
+						},
+					}),
+				}),
+			},
+		}
+	} else {
+		typeSpec.Type = &dst.StructType{
+			Fields: &dst.FieldList{
+				List: append(make([]*dst.Field, 0), &dst.Field{
+					Type: &dst.Ident{
+						Name: *proxyTarget,
+						Obj: &dst.Object{
+							Kind: dst.Typ,
+						},
+					},
+					Names: append(make([]*dst.Ident, 0)),
+				}),
+			},
+		}
+	}
+	//构造参数
+	params := append(make([]*dst.Field, 0))
+	if *proxyTarget != "" {
+		params = append(params, &dst.Field{
+			Names: append(make([]*dst.Ident, 0), &dst.Ident{
+				Name: "src",
+			}),
+			Type: &dst.Ident{Name: *proxyTarget},
+		})
+	}
+	//构造内容
+	body := make([]dst.Expr, 0)
+	if *proxyTarget != "" {
+		body = append(body, &dst.UnaryExpr{
+			Op: token.AND,
+			X: &dst.CompositeLit{
 				Type: &dst.Ident{
-					Name: "Instance",
+					Name: *structName,
 					Obj: &dst.Object{
+						Name: *structName,
 						Kind: dst.Typ,
 					},
 				},
-				Names: append(make([]*dst.Ident, 0), &dst.Ident{
-					Name: "instance",
-					Obj: &dst.Object{
+				Elts: append(make([]dst.Expr, 0), &dst.KeyValueExpr{
+					Key: &dst.Ident{Name: "proxy"},
+					Value: &dst.Ident{Name: "src", Obj: &dst.Object{
+						Name: "src",
 						Kind: dst.Var,
-						Name: "instance",
-					},
+					}},
 				}),
-			}),
-		},
+			},
+		})
+	} else {
+		body = append(body, &dst.UnaryExpr{
+			Op: token.AND,
+			X: &dst.CompositeLit{
+				Type: &dst.Ident{
+					Name: *structName,
+					Obj: &dst.Object{
+						Name: *structName,
+						Kind: dst.Typ,
+					},
+				},
+			},
+		})
 	}
+	//构造函数
+	newFuncName := "New" + *structName
+
 	structFuncDecl := &dst.FuncDecl{
 		Name: &dst.Ident{
-			Name: "New" + *structName,
+			Name: newFuncName,
 			Obj: &dst.Object{
-				Name: "New" + *structName,
+				Name: newFuncName,
 				Kind: dst.Fun,
 			},
 		},
 		Type: &dst.FuncType{
-			Params: &dst.FieldList{List: append(make([]*dst.Field, 0), &dst.Field{
-				Names: append(make([]*dst.Ident, 0), &dst.Ident{
-					Name: "src",
-				}),
-				Type: &dst.Ident{Name: *proxyTarget},
-			})},
+			Params: &dst.FieldList{List: params},
 			Results: &dst.FieldList{List: append(make([]*dst.Field, 0), &dst.Field{
 				Names: append(make([]*dst.Ident, 0)),
-				Type: &dst.Ident{Name: *proxyTarget, Obj: &dst.Object{
-					Name: *proxyTarget,
-					Kind: dst.Typ,
+				Type: &dst.StarExpr{X: &dst.Ident{
+					Name: *structName, Obj: &dst.Object{
+						Name: *structName,
+						Kind: dst.Typ,
+					},
 				}},
 			})},
 		},
 		Body: &dst.BlockStmt{
 			List: append(make([]dst.Stmt, 0), &dst.ReturnStmt{
-				Results: append(make([]dst.Expr, 0), &dst.UnaryExpr{
-					Op: token.AND,
-					X: &dst.CompositeLit{
-						Type: &dst.Ident{
-							Name: *structName,
-							Obj: &dst.Object{
-								Name: *structName,
-								Kind: dst.Typ,
-							},
-						},
-						Elts: append(make([]dst.Expr, 0), &dst.KeyValueExpr{
-							Key: &dst.Ident{Name: "proxy"},
-							Value: &dst.Ident{Name: "src", Obj: &dst.Object{
-								Name: "src",
-								Kind: dst.Var,
-							}},
-						}),
-					},
-				}),
+				Results: body,
 			}),
 		},
+	}
+	if val, ok := oldMethodMap[newFuncName]; ok {
+		structFuncDecl = val
 	}
 	funcDecls := append(make([]dst.Decl, 0),
 		&dst.GenDecl{
@@ -233,63 +340,89 @@ func main() {
 				argsCount++
 			}
 		}
-
-		funcDecls = append(funcDecls, &dst.FuncDecl{
-			Recv: &dst.FieldList{
-				List: append(make([]*dst.Field, 0), &dst.Field{
-					Names: append(make([]*dst.Ident, 0), &dst.Ident{
-						Name: "t",
-						Obj: &dst.Object{
+		if valFunc, ok := oldMethodMap[x.Names[0].Name]; ok {
+			funcDecls = append(funcDecls, valFunc)
+			interfaceMethodMap[x.Names[0].Name] = valFunc
+		} else {
+			body := make([]dst.Stmt, 0)
+			if *proxyTarget != "" {
+				body = append(body, &dst.AssignStmt{
+					Lhs: assings,
+					Tok: tok,
+					Rhs: append(make([]dst.Expr, 0), &dst.CallExpr{
+						Fun: &dst.SelectorExpr{
+							X: &dst.SelectorExpr{
+								X:   &dst.Ident{Name: "t"},
+								Sel: dst.NewIdent("proxy"),
+							},
+							Sel: dst.NewIdent(x.Names[0].Name),
+						},
+						Args: params,
+					}),
+				}, &dst.ReturnStmt{
+					Results: returns,
+				})
+			} else {
+				body = append(make([]dst.Stmt, 0), &dst.ExprStmt{
+					X: &dst.CallExpr{
+						Fun: &dst.Ident{Name: "panic"},
+						Args: append(make([]dst.Expr, 0), &dst.BasicLit{
+							Kind:  token.STRING,
+							Value: "\"need implement\"",
+						}),
+					},
+				})
+			}
+			varFunc := &dst.FuncDecl{
+				Recv: &dst.FieldList{
+					List: append(make([]*dst.Field, 0), &dst.Field{
+						Names: append(make([]*dst.Ident, 0), &dst.Ident{
 							Name: "t",
-							Kind: dst.Var,
+							Obj: &dst.Object{
+								Name: "t",
+								Kind: dst.Var,
+							},
+						}),
+						Type: &dst.StarExpr{
+							X: &dst.Ident{
+								Name: *structName,
+								Obj: &dst.Object{
+									Name: *structName,
+									Kind: dst.Typ,
+								},
+							},
 						},
 					}),
-					Type: &dst.StarExpr{
-						X: &dst.Ident{
-							Name: *structName,
-							Obj: &dst.Object{
-								Name: *structName,
-								Kind: dst.Typ,
-							},
-						},
-					},
-				}),
-			},
-			Name: dst.NewIdent(x.Names[0].Name),
-			Type: x.Type.(*dst.FuncType),
-			Body: &dst.BlockStmt{
-				List: append(make([]dst.Stmt, 0),
-					&dst.AssignStmt{
-						Lhs: assings,
-						Tok: tok,
-						Rhs: append(make([]dst.Expr, 0), &dst.CallExpr{
-							Fun: &dst.SelectorExpr{
-								X:   &dst.Ident{Name: "proxy"},
-								Sel: dst.NewIdent(x.Names[0].Name),
-							},
-							Args: params,
-						}),
-					}, &dst.ReturnStmt{
-						Results: returns,
-					},
-				),
-			},
-		})
+				},
+				Name: dst.NewIdent(x.Names[0].Name),
+				Type: x.Type.(*dst.FuncType),
+				Body: &dst.BlockStmt{
+					List: body,
+				},
+			}
+			interfaceMethodMap[x.Names[0].Name] = valFunc
+			funcDecls = append(funcDecls, varFunc)
+		}
+	}
+	//如果新结构代码有新建内部方法,则恢复新方法
+	for k, v := range oldMethodMap {
+		if _, ok := interfaceMethodMap[k]; !ok && k != newFuncName {
+			funcDecls = append(funcDecls, v)
+		}
 	}
 	dsTree := dst.File{
-		Name:  &dst.Ident{Name: "Proxy" + *proxyTarget},
 		Decls: funcDecls,
 	}
-	fmt.Printf("%+v", funcDecls)
-
-	// tempOut := *output
-	// if *isOverWrite {
-	// 	tempOut = path
-	// }
-	// ret, _ := os.OpenFile(tempOut, os.O_WRONLY|os.O_CREATE, 0666)
-	// if err := decorator.Fprint(ret, f); err != nil {
-	// 	panic(err)
-	// }
+	if *proxyTarget != "" {
+		dsTree.Name = &dst.Ident{Name: "Proxy" + *proxyTarget}
+	} else {
+		dsTree.Name = &dst.Ident{Name: *toPackageName}
+	}
+	//	os.Remove(tempOut)
+	ret, _ := os.OpenFile(tempOut, os.O_WRONLY|os.O_CREATE, 0666)
+	if err := decorator.Fprint(ret, &dsTree); err != nil {
+		panic(err)
+	}
 	// dst.Print(dsTree)
 	if err := decorator.Print(&dsTree); err != nil {
 		panic(err)
