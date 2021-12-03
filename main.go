@@ -35,6 +35,22 @@ var (
 	hasInterfaceInFile = false
 )
 
+func findGoMod(path string) string {
+	readFile := sysPath.Join(strings.Trim(path, " "), "go.mod")
+	_, err := os.ReadFile(readFile)
+	if err == nil {
+		return path
+	} else {
+		paths := strings.Split(path, string(os.PathSeparator))
+		last := len(paths) - 1
+		topPath := sysPath.Join(paths[:last]...)
+		if topPath == "" {
+			return ""
+		}
+		return findGoMod(sysPath.Join(string(os.PathSeparator), topPath))
+	}
+}
+
 //go:generate go version
 func main() {
 	flag.Parse()
@@ -49,7 +65,8 @@ func main() {
 	if os.Getenv("USE_WD") != "" {
 		wd = os.Getenv("USE_WD")
 	}
-	buf, err := os.ReadFile(sysPath.Join(wd, "go.mod"))
+	rootPath := findGoMod(wd)
+	buf, err := os.ReadFile(sysPath.Join(rootPath, "go.mod"))
 	if err != nil {
 		fmt.Printf("gomod read %s \r\n", err)
 		return
@@ -66,18 +83,35 @@ func main() {
 	}
 	mod := strings.Split(string(line), " ")[1]
 	file := os.Getenv("GOFILE")
+	// pack := os.Getenv("GOPACKAGE")
 	pack := os.Getenv("GOPACKAGE")
 
-	path := wd + string(os.PathSeparator) + file
-
+	// path := wd + string(os.PathSeparator) + file
+	path := sysPath.Join(wd, file)
+	// fmt.Println("path " + path + " \r\n")
+	// fmt.Println("wd " + wd + " \r\n")
+	// fmt.Println("GOFILE " + file + " \r\n")
+	// fmt.Println("rootPath " + rootPath + " \r\n")
+	fmt.Println("rootPath " + rootPath + " \r\n")
+	fmt.Println("mod " + mod + " \r\n")
 	tempOut := *output
 	if *isOverWrite {
 		tempOut = path
 	} else {
 		nameStr := *structName
 		name := strings.ToLower(nameStr[:1]) + nameStr[1:]
-		tempOut = wd + string(os.PathSeparator) + tempOut + string(os.PathSeparator) + name + ".go"
+		outPath := sysPath.Join(rootPath, *output)
+		dirInfo, err := os.Stat(outPath)
+		if err != nil || !dirInfo.IsDir() {
+			fmt.Printf("输出目录不存在 请检查是否正常, 错误目录:" + outPath)
+			return
+		}
+		tempOut = sysPath.Join(outPath, name+".go")
 	}
+	fmt.Println("tempOut " + tempOut + " \r\n")
+
+	// tempOut = "/Users/chen/IdeaProjects/hs-go/app/job/" + (*structName) + ".go"
+
 	if FileExist(tempOut) {
 		buf, err := os.ReadFile(tempOut)
 		if len(buf) > 0 && err == nil {
@@ -153,9 +187,6 @@ func main() {
 					interfaceImport = append(interfaceImport, x)
 				}
 			}
-
-			fmt.Printf("d %+v", x)
-
 		}
 		return true
 	})
@@ -166,7 +197,7 @@ func main() {
 	// 		Value: "\"" + sysPath.Join(mod, filepath.Dir(file)) + "\"",
 	// 	},
 	// })
-	fmt.Printf("d %+v mod %s", interfaceImport, mod)
+	// fmt.Printf("d %+v mod %s", interfaceImport, mod)
 
 	typeSpec := &dst.TypeSpec{}
 	typeSpec.Name = &dst.Ident{
@@ -302,7 +333,6 @@ func main() {
 		structFuncDecl,
 	)
 	for _, x := range interfaceDecl.Methods.List {
-		fmt.Printf(" f %+v", x)
 		params := make([]dst.Expr, 0)
 		isNameReturn := false
 		funcType := x.Type.(*dst.FuncType)
@@ -424,7 +454,8 @@ func main() {
 		panic(err)
 	}
 	// dst.Print(dsTree)
-	if err := decorator.Print(&dsTree); err != nil {
-		panic(err)
-	}
+	// if err := decorator.Print(&dsTree); err != nil {
+	// 	panic(err)
+	// }
+	fmt.Printf("执行完毕!")
 }
