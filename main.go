@@ -212,7 +212,7 @@ func main() {
 			Value: "\"" + mod + strings.TrimPrefix(wd, rootPath) + "\"",
 		},
 	})
-	//老代码有心增import的处理
+	//老代码有新增import的处理
 	findImport := func(d *dst.ImportSpec) bool {
 		for _, v := range interfaceImport {
 			if v.(*dst.ImportSpec).Path.Value == d.Path.Value {
