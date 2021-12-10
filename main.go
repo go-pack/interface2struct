@@ -240,7 +240,7 @@ func main() {
 		typeSpec.Type = &dst.StructType{
 			Fields: &dst.FieldList{
 				List: append(make([]*dst.Field, 0), &dst.Field{
-					Type: &dst.SelectorExpr{X: dst.NewIdent(pack), Sel: &dst.Ident{Name: *structName}},
+					Type: &dst.SelectorExpr{X: dst.NewIdent(pack), Sel: &dst.Ident{Name: *proxyTarget}},
 					Names: append(make([]*dst.Ident, 0), &dst.Ident{
 						Name: "proxy",
 						Obj: &dst.Object{
@@ -273,7 +273,7 @@ func main() {
 			Names: append(make([]*dst.Ident, 0), &dst.Ident{
 				Name: "src",
 			}),
-			Type: &dst.SelectorExpr{X: dst.NewIdent(pack), Sel: &dst.Ident{Name: *structName}},
+			Type: &dst.SelectorExpr{X: dst.NewIdent(pack), Sel: &dst.Ident{Name: *proxyTarget}},
 		})
 	}
 	//构造内容
@@ -380,19 +380,21 @@ func main() {
 		returns := make([]dst.Expr, 0)
 		assings := make([]dst.Expr, 0)
 		var tok token.Token
-
-		for _, result := range funcType.Results.List {
-			if isNameReturn {
-				tok = token.ASSIGN
-				returns = append(returns, &dst.Ident{Name: result.Names[0].Name})
-				assings = append(assings, &dst.Ident{Name: result.Names[0].Name})
-			} else {
-				tok = token.DEFINE
-				returns = append(returns, &dst.Ident{Name: fmt.Sprintf("args%d", argsCount)})
-				assings = append(assings, &dst.Ident{Name: fmt.Sprintf("args%d", argsCount)})
-				argsCount++
+		if funcType.Results != nil {
+			for _, result := range funcType.Results.List {
+				if isNameReturn {
+					tok = token.ASSIGN
+					returns = append(returns, &dst.Ident{Name: result.Names[0].Name})
+					assings = append(assings, &dst.Ident{Name: result.Names[0].Name})
+				} else {
+					tok = token.DEFINE
+					returns = append(returns, &dst.Ident{Name: fmt.Sprintf("args%d", argsCount)})
+					assings = append(assings, &dst.Ident{Name: fmt.Sprintf("args%d", argsCount)})
+					argsCount++
+				}
 			}
 		}
+
 		if valFunc, ok := oldMethodMap[x.Names[0].Name]; ok {
 			funcDecls = append(funcDecls, valFunc)
 			interfaceMethodMap[x.Names[0].Name] = valFunc
@@ -467,7 +469,7 @@ func main() {
 		Decls: funcDecls,
 	}
 	if *proxyTarget != "" {
-		dsTree.Name = &dst.Ident{Name: "Proxy" + *proxyTarget}
+		dsTree.Name = &dst.Ident{Name: *toPackageName}
 	} else {
 		dsTree.Name = &dst.Ident{Name: *toPackageName}
 	}
