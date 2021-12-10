@@ -22,7 +22,6 @@ type methods = map[*dst.FuncType]bool
 
 var (
 	interfaceName = flag.String("s", "IIndexService", "interface名称")
-	isOverWrite   = flag.Bool("m", false, "是否覆盖")
 	structName    = flag.String("name", *interfaceName+"Impl", "structName")
 	output        = flag.String("o", "/tmp/xx.go", "输出位置")
 	proxyTarget   = flag.String("p", "", "要代理的结构")
@@ -96,19 +95,15 @@ func main() {
 	fmt.Println("rootPath " + rootPath + " \r\n")
 	fmt.Println("mod " + mod + " \r\n")
 	tempOut := *output
-	if *isOverWrite {
-		tempOut = path
-	} else {
-		nameStr := *structName
-		name := strings.ToLower(nameStr[:1]) + nameStr[1:]
-		outPath := sysPath.Join(rootPath, *output)
-		dirInfo, err := os.Stat(outPath)
-		if err != nil || !dirInfo.IsDir() {
-			fmt.Printf("输出目录不存在 请检查是否正常, 错误目录:" + outPath)
-			return
-		}
-		tempOut = sysPath.Join(outPath, name+".go")
+	nameStr := *structName
+	name := strings.ToLower(nameStr[:1]) + nameStr[1:]
+	outPath := sysPath.Join(rootPath, *output)
+	dirInfo, err := os.Stat(outPath)
+	if err != nil || !dirInfo.IsDir() {
+		fmt.Printf("输出目录不存在 请检查是否正常, 错误目录:" + outPath)
+		return
 	}
+	tempOut = sysPath.Join(outPath, name+".go")
 	fmt.Println("tempOut " + tempOut + " \r\n")
 
 	// tempOut = "/Users/chen/IdeaProjects/hs-go/app/job/" + (*structName) + ".go"
@@ -240,7 +235,9 @@ func main() {
 		typeSpec.Type = &dst.StructType{
 			Fields: &dst.FieldList{
 				List: append(make([]*dst.Field, 0), &dst.Field{
-					Type: &dst.SelectorExpr{X: dst.NewIdent(pack), Sel: &dst.Ident{Name: *proxyTarget}},
+					Type: &dst.StarExpr{
+						X: &dst.SelectorExpr{X: dst.NewIdent(pack), Sel: &dst.Ident{Name: *proxyTarget}},
+					},
 					Names: append(make([]*dst.Ident, 0), &dst.Ident{
 						Name: "proxy",
 						Obj: &dst.Object{
@@ -273,7 +270,9 @@ func main() {
 			Names: append(make([]*dst.Ident, 0), &dst.Ident{
 				Name: "src",
 			}),
-			Type: &dst.SelectorExpr{X: dst.NewIdent(pack), Sel: &dst.Ident{Name: *proxyTarget}},
+			Type: &dst.StarExpr{
+				X: &dst.SelectorExpr{X: dst.NewIdent(pack), Sel: &dst.Ident{Name: *proxyTarget}},
+			},
 		})
 	}
 	//构造内容
